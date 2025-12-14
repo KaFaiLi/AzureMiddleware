@@ -174,7 +174,7 @@ if response.usage.completion_tokens_details:
 | `/docs` | GET | No | Swagger UI documentation |
 | `/openai/deployments/{deployment}/chat/completions` | POST | Yes | Chat completions |
 | `/openai/deployments/{deployment}/embeddings` | POST | Yes | Create embeddings |
-| `/openai/deployments/{deployment}/responses` | POST | Yes | Responses API |
+| `/openai/deployments/{deployment}/responses` | POST | Yes | Responses API (under development) |
 
 ### Authentication
 
@@ -212,7 +212,7 @@ Logs are stored in `logs/YYYYMMDD/` with encrypted request/response content:
 ```
 logs/
 └── 20251214/
-    ├── requests.jsonl.gz
+    ├── requests.jsonl
     └── ...
 ```
 
