@@ -112,9 +112,9 @@ def create_app(config: AppConfig) -> FastAPI:
             }
         }
         
-        # Apply security to all paths except health and metrics
+        # Apply security to all paths except health, metrics, and models
         for path, methods in openapi_schema.get("paths", {}).items():
-            if path not in ["/health", "/metrics"]:
+            if path not in ["/health", "/metrics", "/models"]:
                 for method in methods.values():
                     if isinstance(method, dict):
                         method["security"] = [{"ApiKeyAuth": []}]
@@ -151,6 +151,7 @@ def create_app(config: AppConfig) -> FastAPI:
         supported_endpoints = [
             "GET /health - Health check (no auth)",
             "GET /metrics - Cost metrics (no auth)",
+            "GET /models - List available models (no auth)",
             "POST /openai/deployments/{deployment}/chat/completions - Chat completions",
             "POST /openai/deployments/{deployment}/embeddings - Embeddings",
             "POST /openai/deployments/{deployment}/responses - Responses API",

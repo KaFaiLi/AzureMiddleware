@@ -53,7 +53,7 @@ class LocalAPIKeyMiddleware:
     """
 
     # Routes that don't require authentication
-    PUBLIC_ROUTES = {"/health", "/metrics", "/docs", "/openapi.json", "/redoc"}
+    PUBLIC_ROUTES = {"/health", "/metrics", "/models", "/docs", "/openapi.json", "/redoc"}
 
     def __init__(self, api_key: SecretStr) -> None:
         """Initialize with expected API key.

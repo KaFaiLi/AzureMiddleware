@@ -3,10 +3,11 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from azure_middleware.config import AppConfig
 from azure_middleware.cost.tracker import CostTracker
-from azure_middleware.dependencies import get_cost_tracker
+from azure_middleware.dependencies import get_cost_tracker, get_config
 
 
 router = APIRouter(tags=["Health & Metrics"])
@@ -26,6 +27,27 @@ class MetricsResponse(BaseModel):
     daily_cap_eur: float
     date: str
     percentage_used: float
+
+
+class ModelPricing(BaseModel):
+    """Pricing info for a model."""
+
+    input: float = Field(..., description="Price per 1000 input tokens (EUR)")
+    output: float = Field(..., description="Price per 1000 output tokens (EUR)")
+
+
+class ModelInfo(BaseModel):
+    """Information about an available model."""
+
+    id: str = Field(..., description="Model/deployment name")
+    pricing: ModelPricing = Field(..., description="Pricing per 1000 tokens")
+
+
+class ModelsResponse(BaseModel):
+    """List of available models."""
+
+    object: str = Field(default="list", description="Object type")
+    data: list[ModelInfo] = Field(..., description="List of available models")
 
 
 def get_health_response() -> HealthResponse:
@@ -76,3 +98,29 @@ async def get_metrics(cost_tracker: CostTracker = Depends(get_cost_tracker)) -> 
         date=datetime.now(timezone.utc).date().isoformat(),
         percentage_used=round(percentage, 2),
     )
+
+
+@router.get(
+    "/models",
+    response_model=ModelsResponse,
+    summary="List available models",
+    description="Returns a list of all available models/deployments with their pricing. No authentication required.",
+)
+async def list_models(config: AppConfig = Depends(get_config)) -> ModelsResponse:
+    """List all available models.
+
+    Returns all configured models with their pricing information.
+    No authentication required.
+    """
+    models = [
+        ModelInfo(
+            id=model_name,
+            pricing=ModelPricing(
+                input=pricing.input,
+                output=pricing.output,
+            ),
+        )
+        for model_name, pricing in config.pricing.items()
+    ]
+
+    return ModelsResponse(data=models)
