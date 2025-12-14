@@ -1,4 +1,4 @@
-﻿# AzureMiddleware Development Guidelines
+# AzureMiddleware Development Guidelines
 
 Local FastAPI proxy for Azure OpenAI with authentication, encrypted logging, and cost tracking.
 
@@ -94,6 +94,3 @@ See [config.example.yaml](config.example.yaml) for full schema. Key sections:
 - `local`: host, port, api_key (protects middleware)
 - `pricing`: per-model EUR/1000 tokens
 - `logging`: encryption_key (base64 32-byte), compression
-
-<!-- MANUAL ADDITIONS START -->
-<!-- MANUAL ADDITIONS END -->
