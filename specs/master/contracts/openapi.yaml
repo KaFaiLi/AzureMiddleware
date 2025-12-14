@@ -1,0 +1,464 @@
+openapi: 3.1.0
+info:
+  title: Azure OpenAI Local Middleware
+  description: |
+    Local FastAPI proxy for Azure OpenAI with authentication, logging, and cost tracking.
+    Maintains full compatibility with Azure OpenAI REST API.
+  version: 1.0.0
+  contact:
+    name: Azure Middleware
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+security:
+  - localApiKey: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns 200 OK if server is running. No authentication required.
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /metrics:
+    get:
+      summary: Cost metrics
+      description: Returns current daily cost and cap. No authentication required.
+      operationId: getMetrics
+      security: []
+      responses:
+        '200':
+          description: Current cost metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+
+  /openai/deployments/{deployment}/chat/completions:
+    post:
+      summary: Chat Completions
+      description: |
+        Create a chat completion. Supports streaming via `stream: true`.
+        Fully compatible with Azure OpenAI API.
+      operationId: createChatCompletion
+      parameters:
+        - $ref: '#/components/parameters/deployment'
+        - $ref: '#/components/parameters/apiVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of ChatCompletionChunk objects
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/CostCapExceeded'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /openai/deployments/{deployment}/embeddings:
+    post:
+      summary: Embeddings
+      description: Create embeddings for input text. Fully compatible with Azure OpenAI API.
+      operationId: createEmbeddings
+      parameters:
+        - $ref: '#/components/parameters/deployment'
+        - $ref: '#/components/parameters/apiVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRequest'
+      responses:
+        '200':
+          description: Embedding response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/CostCapExceeded'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /openai/deployments/{deployment}/responses:
+    post:
+      summary: Responses API
+      description: Create a response using the Responses API. Fully compatible with Azure OpenAI API.
+      operationId: createResponse
+      parameters:
+        - $ref: '#/components/parameters/deployment'
+        - $ref: '#/components/parameters/apiVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Responses API request body (passthrough)
+      responses:
+        '200':
+          description: Response API response
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Responses API response (passthrough)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/CostCapExceeded'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+components:
+  securitySchemes:
+    localApiKey:
+      type: apiKey
+      in: header
+      name: api-key
+      description: Local API key for request authentication
+
+  parameters:
+    deployment:
+      name: deployment
+      in: path
+      required: true
+      description: Azure OpenAI deployment name
+      schema:
+        type: string
+        example: gpt-4
+
+    apiVersion:
+      name: api-version
+      in: query
+      required: false
+      description: Azure OpenAI API version (defaults to config value)
+      schema:
+        type: string
+        example: "2024-02-01"
+
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+        timestamp:
+          type: string
+          format: date-time
+
+    MetricsResponse:
+      type: object
+      required:
+        - daily_cost_eur
+        - daily_cap_eur
+        - date
+      properties:
+        daily_cost_eur:
+          type: number
+          format: float
+          description: Current cumulative daily cost in EUR
+          example: 2.5678
+        daily_cap_eur:
+          type: number
+          format: float
+          description: Configured daily cost cap in EUR
+          example: 5.0
+        remaining_eur:
+          type: number
+          format: float
+          description: Remaining budget for today
+          example: 2.4322
+        date:
+          type: string
+          format: date
+          description: Current date (UTC)
+          example: "2025-12-14"
+        reset_at:
+          type: string
+          format: date-time
+          description: UTC midnight when counter resets
+          example: "2025-12-15T00:00:00Z"
+
+    ChatCompletionRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          default: 1
+        max_tokens:
+          type: integer
+          minimum: 1
+        stream:
+          type: boolean
+          default: false
+        tools:
+          type: array
+          items:
+            type: object
+        tool_choice:
+          oneOf:
+            - type: string
+            - type: object
+
+    ChatMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+        name:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            type: object
+        tool_call_id:
+          type: string
+
+    ChatCompletionResponse:
+      type: object
+      required:
+        - id
+        - object
+        - created
+        - model
+        - choices
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [chat.completion]
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatChoice'
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    ChatChoice:
+      type: object
+      required:
+        - index
+        - message
+        - finish_reason
+      properties:
+        index:
+          type: integer
+        message:
+          $ref: '#/components/schemas/ChatMessage'
+        finish_reason:
+          type: string
+          enum: [stop, length, tool_calls, content_filter]
+
+    EmbeddingRequest:
+      type: object
+      required:
+        - input
+      properties:
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        encoding_format:
+          type: string
+          enum: [float, base64]
+          default: float
+
+    EmbeddingResponse:
+      type: object
+      required:
+        - object
+        - data
+        - model
+        - usage
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Embedding'
+        model:
+          type: string
+        usage:
+          $ref: '#/components/schemas/EmbeddingUsage'
+
+    Embedding:
+      type: object
+      required:
+        - object
+        - embedding
+        - index
+      properties:
+        object:
+          type: string
+          enum: [embedding]
+        embedding:
+          type: array
+          items:
+            type: number
+        index:
+          type: integer
+
+    Usage:
+      type: object
+      required:
+        - prompt_tokens
+        - completion_tokens
+        - total_tokens
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    EmbeddingUsage:
+      type: object
+      required:
+        - prompt_tokens
+        - total_tokens
+      properties:
+        prompt_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            param:
+              type: string
+            type:
+              type: string
+
+    CostCapError:
+      type: object
+      required:
+        - error
+        - current_cost_eur
+        - limit_eur
+        - message
+      properties:
+        error:
+          type: string
+          enum: [daily_cost_limit_exceeded]
+        current_cost_eur:
+          type: number
+          format: float
+        limit_eur:
+          type: number
+          format: float
+        message:
+          type: string
+        retry_after:
+          type: integer
+          description: Seconds until UTC midnight
+
+  responses:
+    BadRequest:
+      description: Invalid request body
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    CostCapExceeded:
+      description: Daily cost cap exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until UTC midnight
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CostCapError'
+
+    BadGateway:
+      description: Azure OpenAI unreachable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

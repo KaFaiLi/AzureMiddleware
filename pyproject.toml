@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "azure-middleware"
+version = "0.1.0"
+description = "Local FastAPI proxy for Azure OpenAI with authentication, logging, and cost tracking"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Developer" }
+]
+keywords = ["azure", "openai", "proxy", "fastapi", "middleware"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: Proxy Servers",
+    "Typing :: Typed",
+]
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "httpx>=0.26.0",
+    "azure-identity>=1.15.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.5.0",
+    "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+    "openai>=1.0.0",
+    "httpx>=0.26.0",
+]
+
+[project.scripts]
+azure-middleware = "azure_middleware.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/example/azure-middleware"
+Documentation = "https://github.com/example/azure-middleware#readme"
+Repository = "https://github.com/example/azure-middleware"
+
+[tool.hatch.build.targets.wheel]
+packages = ["azure_middleware"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "integration: mark test as integration test (requires running server)",
+    "slow: mark test as slow running",
+    "thinking: mark test as requiring thinking model",
+    "embedding: mark test as requiring embedding model",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true

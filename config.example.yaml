@@ -1,0 +1,67 @@
+# Azure OpenAI Local Middleware Configuration
+# Copy this file to config.yaml and update with your values
+
+azure:
+  # Azure OpenAI resource endpoint
+  endpoint: "https://your-resource.openai.azure.com"
+  
+  # Default deployment name
+  deployment: "gpt-4"
+  
+  # API version to use
+  api_version: "2024-02-01"
+  
+  # Authentication mode: "aad" for Azure AD, "api_key" for API key
+  auth_mode: "aad"
+  
+  # API key (only used if auth_mode is "api_key")
+  api_key: ""
+
+local:
+  # Local server bind address
+  host: "127.0.0.1"
+  
+  # Local server port
+  port: 8000
+  
+  # Local API key for request authentication
+  # Generate a secure random string for this
+  api_key: "sk-1234"
+
+# Pricing in EUR per 1000 tokens
+# Add entries for each deployment you use
+pricing:
+  gpt-4:
+    input: 0.03
+    output: 0.06
+  gpt-4-turbo:
+    input: 0.01
+    output: 0.03
+  gpt-35-turbo:
+    input: 0.0015
+    output: 0.002
+  text-embedding-ada-002:
+    input: 0.0001
+    output: 0.0
+  text-embedding-3-small:
+    input: 0.00002
+    output: 0.0
+  text-embedding-3-large:
+    input: 0.00013
+    output: 0.0
+
+limits:
+  # Daily cost cap in EUR
+  # Requests will be blocked with HTTP 429 when exceeded
+  daily_cost_cap_eur: 5.0
+
+logging:
+  # Base64-encoded AES-256 key (32 bytes)
+  # Generate with: python -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+  encryption_key: "GENERATE_A_KEY_AND_PASTE_HERE"
+  
+  # Compression algorithm: "gzip" or "none"
+  compression: "gzip"
+  
+  # Log directory (relative to working directory or absolute)
+  directory: "logs"
