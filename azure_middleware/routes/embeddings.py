@@ -29,9 +29,36 @@ router = APIRouter(tags=["Embeddings"])
     "/openai/deployments/{deployment}/embeddings",
     summary="Embeddings",
     description="Create embeddings for input text. Fully compatible with Azure OpenAI API.",
-
     responses={
         429: {"model": CostLimitError, "description": "Daily cost limit exceeded"},
+    },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["input"],
+                        "properties": {
+                            "input": {
+                                "description": "Input text to embed. Can be a string or array of strings.",
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {"type": "array", "items": {"type": "string"}},
+                                ],
+                            },
+                            "dimensions": {"type": "integer", "description": "Number of dimensions for output embeddings."},
+                            "encoding_format": {"type": "string", "enum": ["float", "base64"], "description": "Format of the embeddings."},
+                            "user": {"type": "string", "description": "Unique identifier for the end-user."},
+                        },
+                    },
+                    "example": {
+                        "input": "Hello, world!"
+                    },
+                },
+            },
+        },
     },
 )
 async def create_embeddings(

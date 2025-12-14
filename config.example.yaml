@@ -34,6 +34,14 @@ pricing:
   gpt-35-turbo:
     input: 0.0015
     output: 0.002
+  # Standard chat models
+  gpt-4.1-nano:
+    input: 0.0001
+    output: 0.0004
+  # Thinking/reasoning models
+  gpt-5-nano:
+    input: 0.01
+    output: 0.03
   text-embedding-ada-002:
     input: 0.0001
     output: 0.0

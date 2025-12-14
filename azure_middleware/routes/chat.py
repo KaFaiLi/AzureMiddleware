@@ -114,6 +114,47 @@ async def get_app_state(request: Request):
     responses={
         429: {"model": CostLimitError, "description": "Daily cost limit exceeded"},
     },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["messages"],
+                        "properties": {
+                            "messages": {
+                                "type": "array",
+                                "description": "A list of messages comprising the conversation so far.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "role": {"type": "string", "enum": ["system", "user", "assistant", "tool"]},
+                                        "content": {"type": "string"},
+                                    },
+                                },
+                            },
+                            "max_completion_tokens": {"type": "integer", "description": "Maximum tokens to generate."},
+                            "temperature": {"type": "number", "description": "Sampling temperature (0.0-2.0)."},
+                            "top_p": {"type": "number", "description": "Nucleus sampling probability."},
+                            "stream": {"type": "boolean", "description": "If true, returns SSE stream."},
+                            "stop": {"type": "array", "items": {"type": "string"}, "description": "Stop sequences."},
+                            "tools": {"type": "array", "description": "Tools the model may call."},
+                            "tool_choice": {"description": "Controls tool selection."},
+                            "response_format": {"type": "object", "description": "Response format (JSON mode/schema)."},
+                        },
+                    },
+                    "example": {
+                        "messages": [
+                            {"role": "system", "content": "You are a helpful assistant."},
+                            {"role": "user", "content": "Hello!"}
+                        ],
+                        "max_completion_tokens": 100
+                    },
+                },
+            },
+        },
+    },
 )
 async def chat_completions(
     request: Request,

@@ -32,6 +32,35 @@ router = APIRouter(tags=["Responses API"])
     responses={
         429: {"model": CostLimitError, "description": "Daily cost limit exceeded"},
     },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["input"],
+                        "properties": {
+                            "input": {
+                                "description": "The input for the response. Can be a string or structured input.",
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {"type": "array"},
+                                ],
+                            },
+                            "max_output_tokens": {"type": "integer", "description": "Maximum number of output tokens."},
+                            "temperature": {"type": "number", "description": "Sampling temperature."},
+                            "instructions": {"type": "string", "description": "System instructions for the model."},
+                        },
+                    },
+                    "example": {
+                        "input": "What is the capital of France?",
+                        "max_output_tokens": 100
+                    },
+                },
+            },
+        },
+    },
 )
 async def create_response(
     request: Request,
