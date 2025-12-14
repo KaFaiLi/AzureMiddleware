@@ -52,7 +52,7 @@ class AzureConfig(BaseModel):
 
 
 class LocalConfig(BaseModel):
-    """Local server settings."""
+    """Local server settings (user-specific)."""
 
     host: str = Field(default="127.0.0.1", description="Bind address")
     port: int = Field(default=8000, ge=1, le=65535, description="Port number")
@@ -110,8 +110,17 @@ class LoggingConfig(BaseModel):
         return base64.b64decode(self.encryption_key.get_secret_value())
 
 
+class ServerConfig(BaseModel):
+    """Server configuration (Azure, logging, pricing) - can be shared."""
+
+    azure: AzureConfig
+    pricing: dict[str, PricingTier] = Field(default_factory=dict)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    logging: LoggingConfig
+
+
 class AppConfig(BaseModel):
-    """Root configuration schema."""
+    """Root configuration schema (combines server and local configs)."""
 
     azure: AzureConfig
     local: LocalConfig
@@ -120,15 +129,16 @@ class AppConfig(BaseModel):
     logging: LoggingConfig
 
 
-def find_config_file(config_path: Path | None = None) -> Path:
-    """Find the configuration file.
+def find_config_file(filename: str, config_path: Path | None = None) -> Path:
+    """Find a configuration file.
 
     Search order:
     1. Explicit path if provided
-    2. ./config.yaml (current directory)
-    3. ~/config.yaml (home directory)
+    2. ./{filename} (current directory)
+    3. ~/{filename} (home directory)
 
     Args:
+        filename: Name of the config file to find
         config_path: Optional explicit path to config file
 
     Returns:
@@ -143,38 +153,33 @@ def find_config_file(config_path: Path | None = None) -> Path:
         raise ConfigError(f"Config file not found: {config_path}")
 
     # Try current directory
-    cwd_config = Path("config.yaml")
+    cwd_config = Path(filename)
     if cwd_config.exists():
         return cwd_config
 
     # Try home directory
-    home_config = Path.home() / "config.yaml"
+    home_config = Path.home() / filename
     if home_config.exists():
         return home_config
 
     raise ConfigError(
-        "Config file not found. Create config.yaml in current directory or home directory, "
-        "or specify path with --config"
+        f"Config file '{filename}' not found. Create it in current directory or home directory, "
+        "or specify path with appropriate --config option"
     )
 
 
-def load_config(config_path: Path | None = None) -> AppConfig:
-    """Load and validate configuration from YAML file.
+def load_yaml_file(path: Path) -> dict:
+    """Load and parse a YAML file.
 
     Args:
-        config_path: Optional explicit path to config file
+        path: Path to the YAML file
 
     Returns:
-        Validated AppConfig instance
+        Parsed YAML content as dict
 
     Raises:
-        ConfigError: If config file is not found or invalid
+        ConfigError: If file cannot be read or parsed
     """
-    try:
-        path = find_config_file(config_path)
-    except ConfigError:
-        raise
-
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw_config = yaml.safe_load(f)
@@ -185,6 +190,66 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 
     if not isinstance(raw_config, dict):
         raise ConfigError(f"Config file {path} must contain a YAML mapping")
+
+    return raw_config
+
+
+def load_config(
+    server_config_path: Path | None = None,
+    local_config_path: Path | None = None,
+) -> AppConfig:
+    """Load and validate configuration from YAML files.
+
+    Loads from two separate files:
+    - config.yaml: Server settings (Azure, logging, pricing, limits)
+    - local.yaml: Local settings (host, port, api_key)
+
+    Args:
+        server_config_path: Optional explicit path to server config file
+        local_config_path: Optional explicit path to local config file
+
+    Returns:
+        Validated AppConfig instance
+
+    Raises:
+        ConfigError: If config files are not found or invalid
+    """
+    # Load server config (Azure, logging, pricing, limits)
+    server_path = find_config_file("config.yaml", server_config_path)
+    server_config = load_yaml_file(server_path)
+
+    # Load local config (host, port, api_key)
+    local_path = find_config_file("local.yaml", local_config_path)
+    local_config = load_yaml_file(local_path)
+
+    # Merge configs - local settings go under 'local' key
+    merged_config = {
+        **server_config,
+        "local": local_config,
+    }
+
+    try:
+        return AppConfig.model_validate(merged_config)
+    except Exception as e:
+        raise ConfigError(f"Invalid configuration: {e}")
+
+
+def load_config_single_file(config_path: Path | None = None) -> AppConfig:
+    """Load configuration from a single YAML file (legacy mode).
+
+    For backward compatibility with single config.yaml that contains all settings.
+
+    Args:
+        config_path: Optional explicit path to config file
+
+    Returns:
+        Validated AppConfig instance
+
+    Raises:
+        ConfigError: If config file is not found or invalid
+    """
+    path = find_config_file("config.yaml", config_path)
+    raw_config = load_yaml_file(path)
 
     try:
         return AppConfig.model_validate(raw_config)

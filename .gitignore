@@ -52,6 +52,7 @@ logs/
 
 # Configuration (keep example, ignore actual)
 config.yaml
+local.yaml
 
 # Environment variables
 .env

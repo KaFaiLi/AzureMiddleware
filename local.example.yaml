@@ -1,0 +1,16 @@
+# Azure OpenAI Local Middleware - Local Configuration
+# Copy this file to local.yaml and update with your values
+#
+# This file contains user-specific settings.
+# Server settings (Azure, logging, pricing) go in config.yaml
+
+# Local server bind address
+host: "127.0.0.1"
+
+# Local server port
+port: 8000
+
+# Local API key for request authentication
+# This protects your middleware from unauthorized access
+# Generate a secure random string for this
+api_key: "your-local-api-key-here"

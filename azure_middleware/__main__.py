@@ -1,7 +1,11 @@
 """CLI entry point for Azure OpenAI Local Middleware.
 
 Usage:
-    python -m azure_middleware [--config CONFIG_PATH] [--host HOST] [--port PORT]
+    python -m azure_middleware [--config CONFIG_PATH] [--local LOCAL_PATH] [--host HOST] [--port PORT]
+    
+Config files:
+    - config.yaml: Server settings (Azure, logging, pricing, limits)
+    - local.yaml: Local settings (host, port, api_key)
 """
 
 import argparse
@@ -19,7 +23,18 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=Path,
         default=None,
-        help="Path to config.yaml file (default: ./config.yaml or ~/config.yaml)",
+        help="Path to server config.yaml file (default: ./config.yaml or ~/config.yaml)",
+    )
+    parser.add_argument(
+        "--local",
+        type=Path,
+        default=None,
+        help="Path to local.yaml file (default: ./local.yaml or ~/local.yaml)",
+    )
+    parser.add_argument(
+        "--single-file",
+        action="store_true",
+        help="Use single config file mode (legacy, all settings in config.yaml)",
     )
     parser.add_argument(
         "--host",
@@ -46,11 +61,14 @@ def main() -> int:
     args = parse_args()
 
     # Import here to avoid circular imports and speed up --help
-    from azure_middleware.config import load_config, ConfigError
+    from azure_middleware.config import load_config, load_config_single_file, ConfigError
     from azure_middleware.server import create_app
 
     try:
-        config = load_config(args.config)
+        if args.single_file:
+            config = load_config_single_file(args.config)
+        else:
+            config = load_config(args.config, args.local)
     except ConfigError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
         return 1

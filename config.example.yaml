@@ -1,5 +1,10 @@
-# Azure OpenAI Local Middleware Configuration
+# Azure OpenAI Local Middleware - Server Configuration
 # Copy this file to config.yaml and update with your values
+#
+# This file contains server/shared settings.
+# Local settings (host, port, api_key) go in local.yaml
+#
+# For single-file mode (legacy), run with: --single-file
 
 azure:
   # Azure OpenAI resource endpoint
@@ -16,17 +21,6 @@ azure:
   
   # API key (only used if auth_mode is "api_key")
   api_key: ""
-
-local:
-  # Local server bind address
-  host: "127.0.0.1"
-  
-  # Local server port
-  port: 8000
-  
-  # Local API key for request authentication
-  # Generate a secure random string for this
-  api_key: "sk-1234"
 
 # Pricing in EUR per 1000 tokens
 # Add entries for each deployment you use
