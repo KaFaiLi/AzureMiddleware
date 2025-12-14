@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Request, HTTPException, status, Body
+from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import Response, JSONResponse
 
 from azure_middleware.routes.chat import (
@@ -17,11 +17,7 @@ from azure_middleware.routes.chat import (
 from azure_middleware.cost.tracker import CostCapExceededError
 from azure_middleware.cost.calculator import calculate_cost, extract_token_counts
 from azure_middleware.logging.writer import LogEntry, TokenUsage
-from azure_middleware.routes.models import (
-    ResponsesRequest,
-    ResponsesResponse,
-    CostLimitError,
-)
+from azure_middleware.routes.models import CostLimitError
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +29,6 @@ router = APIRouter(tags=["Responses API"])
     "/openai/deployments/{deployment}/responses",
     summary="Responses API",
     description="Create a response using the Responses API. Fully compatible with Azure OpenAI API.",
-    response_model=ResponsesResponse,
     responses={
         429: {"model": CostLimitError, "description": "Daily cost limit exceeded"},
     },
@@ -41,31 +36,12 @@ router = APIRouter(tags=["Responses API"])
 async def create_response(
     request: Request,
     deployment: str,
-    body: ResponsesRequest = Body(
-        ...,
-        openapi_examples={
-            "simple": {
-                "summary": "Simple input",
-                "value": {
-                    "input": "What is the capital of France?",
-                    "max_output_tokens": 100
-                }
-            },
-            "with_instructions": {
-                "summary": "With instructions",
-                "value": {
-                    "input": "Translate to French: Hello, how are you?",
-                    "instructions": "You are a helpful translator.",
-                    "max_output_tokens": 200
-                }
-            }
-        }
-    ),
 ):
     """Proxy Responses API request to Azure OpenAI.
 
     The Responses API is a newer Azure OpenAI feature that provides
     enhanced response handling.
+    Note: Request body is passed through directly without Pydantic validation.
     """
     state = await get_app_state(request)
     config = state.config
@@ -91,9 +67,15 @@ async def create_response(
             headers={"Retry-After": str(e.seconds_until_reset)},
         )
 
-    # Use the validated body model, serialize back to JSON for proxying
-    request_data = body.model_dump(exclude_none=True)
-    raw_body = json.dumps(request_data).encode("utf-8")
+    # Read raw body and pass through directly - no Pydantic validation
+    raw_body = await request.body()
+    try:
+        request_data = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_json", "message": "Request body must be valid JSON"},
+        )
 
     # Build Azure URL
     query_params = dict(request.query_params)

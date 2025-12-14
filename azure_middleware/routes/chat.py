@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Request, HTTPException, status, Depends, Body
+from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import Response, StreamingResponse
 
 from azure_middleware.config import AppConfig
@@ -14,11 +14,7 @@ from azure_middleware.cost.tracker import CostTracker, CostCapExceededError
 from azure_middleware.cost.calculator import calculate_cost, extract_token_counts
 from azure_middleware.logging.writer import LogWriter, LogEntry, TokenUsage
 from azure_middleware.streaming.buffer import StreamBuffer
-from azure_middleware.routes.models import (
-    ChatCompletionRequest,
-    ChatCompletionResponse,
-    CostLimitError,
-)
+from azure_middleware.routes.models import CostLimitError
 
 
 logger = logging.getLogger(__name__)
@@ -115,7 +111,6 @@ async def get_app_state(request: Request):
     "/openai/deployments/{deployment}/chat/completions",
     summary="Chat Completions",
     description="Create a chat completion. Supports streaming via stream: true.",
-    response_model=ChatCompletionResponse,
     responses={
         429: {"model": CostLimitError, "description": "Daily cost limit exceeded"},
     },
@@ -123,41 +118,6 @@ async def get_app_state(request: Request):
 async def chat_completions(
     request: Request,
     deployment: str,
-    body: ChatCompletionRequest = Body(
-        ...,
-        openapi_examples={
-            "simple": {
-                "summary": "Simple chat",
-                "value": {
-                    "messages": [
-                        {"role": "user", "content": "Hello!"}
-                    ],
-                    "max_completion_tokens": 50
-                }
-            },
-            "with_system": {
-                "summary": "With system message",
-                "value": {
-                    "messages": [
-                        {"role": "system", "content": "You are a helpful assistant."},
-                        {"role": "user", "content": "What is 2+2?"}
-                    ],
-                    "max_completion_tokens": 100,
-                    "temperature": 0.7
-                }
-            },
-            "streaming": {
-                "summary": "Streaming response",
-                "value": {
-                    "messages": [
-                        {"role": "user", "content": "Count to 5"}
-                    ],
-                    "max_completion_tokens": 100,
-                    "stream": True
-                }
-            }
-        }
-    ),
 ):
     """Proxy chat completion request to Azure OpenAI.
 
@@ -166,6 +126,9 @@ async def chat_completions(
     - Cost tracking and enforcement
     - Request/response logging
     - Error forwarding
+    
+    Note: Request body is passed through directly to Azure without Pydantic validation
+    to ensure all fields (tools, response_format, etc.) are forwarded correctly.
     """
     state = await get_app_state(request)
     config = state.config
@@ -191,9 +154,15 @@ async def chat_completions(
             headers={"Retry-After": str(e.seconds_until_reset)},
         )
 
-    # Use the validated body model, serialize back to JSON for proxying
-    request_data = body.model_dump(exclude_none=True)
-    raw_body = json.dumps(request_data).encode("utf-8")
+    # Read raw body and pass through directly - no Pydantic validation
+    raw_body = await request.body()
+    try:
+        request_data = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_json", "message": "Request body must be valid JSON"},
+        )
 
     # Check if streaming
     is_streaming = request_data.get("stream", False) is True
@@ -209,39 +178,57 @@ async def chat_completions(
     headers["Content-Type"] = "application/json"
 
     # Create HTTP client
+    # For streaming, we need to create the client inside the generator to keep it alive
+    # For non-streaming, we can use the context manager pattern
+    if is_streaming:
+        try:
+            return await handle_streaming_request(
+                url=azure_url,
+                headers=headers,
+                body=raw_body,
+                request_data=request_data,
+                deployment=deployment,
+                config=config,
+                cost_tracker=cost_tracker,
+                log_writer=log_writer,
+                start_time=start_time,
+                endpoint=f"/openai/deployments/{deployment}/chat/completions",
+            )
+        except httpx.ConnectError:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "error": "azure_unreachable",
+                    "message": f"Cannot connect to Azure OpenAI at {config.azure.endpoint}. Check your network and Azure configuration.",
+                },
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail={
+                    "error": "azure_timeout",
+                    "message": "Request to Azure OpenAI timed out. Try again or reduce request size.",
+                },
+            )
+    
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=5.0),
         follow_redirects=True,
     ) as client:
         try:
-            if is_streaming:
-                return await handle_streaming_request(
-                    client=client,
-                    url=azure_url,
-                    headers=headers,
-                    body=raw_body,
-                    request_data=request_data,
-                    deployment=deployment,
-                    config=config,
-                    cost_tracker=cost_tracker,
-                    log_writer=log_writer,
-                    start_time=start_time,
-                    endpoint=f"/openai/deployments/{deployment}/chat/completions",
-                )
-            else:
-                return await handle_non_streaming_request(
-                    client=client,
-                    url=azure_url,
-                    headers=headers,
-                    body=raw_body,
-                    request_data=request_data,
-                    deployment=deployment,
-                    config=config,
-                    cost_tracker=cost_tracker,
-                    log_writer=log_writer,
-                    start_time=start_time,
-                    endpoint=f"/openai/deployments/{deployment}/chat/completions",
-                )
+            return await handle_non_streaming_request(
+                client=client,
+                url=azure_url,
+                headers=headers,
+                body=raw_body,
+                request_data=request_data,
+                deployment=deployment,
+                config=config,
+                cost_tracker=cost_tracker,
+                log_writer=log_writer,
+                start_time=start_time,
+                endpoint=f"/openai/deployments/{deployment}/chat/completions",
+            )
 
         except httpx.ConnectError:
             raise HTTPException(
@@ -355,7 +342,6 @@ async def handle_non_streaming_request(
 
 
 async def handle_streaming_request(
-    client: httpx.AsyncClient,
     url: str,
     headers: dict[str, str],
     body: bytes,
@@ -370,7 +356,6 @@ async def handle_streaming_request(
     """Handle streaming chat completion request.
 
     Args:
-        client: HTTP client
         url: Azure URL
         headers: Request headers
         body: Request body
@@ -391,21 +376,40 @@ async def handle_streaming_request(
         """Generate SSE chunks while buffering for logging."""
         nonlocal buffer
 
-        try:
-            async with client.stream("POST", url, content=body, headers=headers) as response:
-                if response.status_code != 200:
-                    # For errors, read full response and yield
-                    error_content = await response.aread()
-                    yield error_content
-                    return
+        # Create client inside generator to keep connection alive for entire stream
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=5.0),
+            follow_redirects=True,
+        ) as client:
+            try:
+                async with client.stream("POST", url, content=body, headers=headers) as response:
+                    if response.status_code != 200:
+                        # For errors, read full response and yield
+                        error_content = await response.aread()
+                        yield error_content
+                        return
 
-                async for chunk in response.aiter_bytes():
-                    buffer.append(chunk)
-                    yield chunk
+                    async for chunk in response.aiter_bytes():
+                        buffer.append(chunk)
+                        yield chunk
 
-        except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            # Log partial stream with error
+            except Exception as e:
+                logger.error(f"Streaming error: {e}")
+                # Log partial stream with error
+                await log_streaming_response(
+                    buffer=buffer,
+                    request_data=request_data,
+                    deployment=deployment,
+                    config=config,
+                    cost_tracker=cost_tracker,
+                    log_writer=log_writer,
+                    start_time=start_time,
+                    endpoint=endpoint,
+                    error=str(e),
+                )
+                raise
+
+            # Log completed stream
             await log_streaming_response(
                 buffer=buffer,
                 request_data=request_data,
@@ -415,22 +419,8 @@ async def handle_streaming_request(
                 log_writer=log_writer,
                 start_time=start_time,
                 endpoint=endpoint,
-                error=str(e),
+                error=None,
             )
-            raise
-
-        # Log completed stream
-        await log_streaming_response(
-            buffer=buffer,
-            request_data=request_data,
-            deployment=deployment,
-            config=config,
-            cost_tracker=cost_tracker,
-            log_writer=log_writer,
-            start_time=start_time,
-            endpoint=endpoint,
-            error=None,
-        )
 
     return StreamingResponse(
         stream_generator(),

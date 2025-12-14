@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Request, HTTPException, status, Body
+from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import Response, JSONResponse
 
 from azure_middleware.routes.chat import (
@@ -17,11 +17,7 @@ from azure_middleware.routes.chat import (
 from azure_middleware.cost.tracker import CostCapExceededError
 from azure_middleware.cost.calculator import calculate_cost, extract_embedding_tokens
 from azure_middleware.logging.writer import LogEntry, TokenUsage
-from azure_middleware.routes.models import (
-    EmbeddingsRequest,
-    EmbeddingsResponse,
-    CostLimitError,
-)
+from azure_middleware.routes.models import CostLimitError
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +29,7 @@ router = APIRouter(tags=["Embeddings"])
     "/openai/deployments/{deployment}/embeddings",
     summary="Embeddings",
     description="Create embeddings for input text. Fully compatible with Azure OpenAI API.",
-    response_model=EmbeddingsResponse,
+
     responses={
         429: {"model": CostLimitError, "description": "Daily cost limit exceeded"},
     },
@@ -41,34 +37,11 @@ router = APIRouter(tags=["Embeddings"])
 async def create_embeddings(
     request: Request,
     deployment: str,
-    body: EmbeddingsRequest = Body(
-        ...,
-        openapi_examples={
-            "single_text": {
-                "summary": "Single text input",
-                "value": {
-                    "input": "Hello, world!"
-                }
-            },
-            "multiple_texts": {
-                "summary": "Multiple texts",
-                "value": {
-                    "input": ["Hello", "World", "How are you?"]
-                }
-            },
-            "with_dimensions": {
-                "summary": "Custom dimensions",
-                "value": {
-                    "input": "Hello, world!",
-                    "dimensions": 256
-                }
-            }
-        }
-    ),
 ):
     """Proxy embeddings request to Azure OpenAI.
 
     Response vectors are NOT logged to save space (as per spec).
+    Note: Request body is passed through directly without Pydantic validation.
     """
     state = await get_app_state(request)
     config = state.config
@@ -94,9 +67,15 @@ async def create_embeddings(
             headers={"Retry-After": str(e.seconds_until_reset)},
         )
 
-    # Use the validated body model, serialize back to JSON for proxying
-    request_data = body.model_dump(exclude_none=True)
-    raw_body = json.dumps(request_data).encode("utf-8")
+    # Read raw body and pass through directly - no Pydantic validation
+    raw_body = await request.body()
+    try:
+        request_data = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_json", "message": "Request body must be valid JSON"},
+        )
 
     # Build Azure URL
     query_params = dict(request.query_params)
