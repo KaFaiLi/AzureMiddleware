@@ -33,6 +33,10 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
     "host",
     "content-length",
+    # Auth headers - must be stripped to avoid conflicts
+    # Client sends local API key, middleware replaces with Azure auth
+    "authorization",
+    "api-key",
 }
 
 # Headers to preserve from Azure response

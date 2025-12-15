@@ -4,10 +4,37 @@ from fastapi import Request, HTTPException, status
 from pydantic import SecretStr
 
 
+def extract_api_key(request: Request) -> str | None:
+    """Extract API key from request headers.
+
+    Supports two formats:
+    1. 'api-key' header (Azure OpenAI native format, Swagger UI)
+    2. 'Authorization: Bearer <key>' header (OpenAI Python SDK format)
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        API key string if found, None otherwise
+    """
+    # First, try 'api-key' header (Azure native format)
+    api_key = request.headers.get("api-key")
+    if api_key:
+        return api_key
+
+    # Second, try 'Authorization: Bearer <key>' header (OpenAI SDK format)
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        return auth_header[7:]  # Strip "Bearer " prefix
+
+    return None
+
+
 def validate_local_api_key(request: Request, expected_key: SecretStr) -> bool:
     """Validate the local API key from request headers.
 
-    Checks the 'api-key' header against the configured local API key.
+    Checks both 'api-key' header and 'Authorization: Bearer' header
+    against the configured local API key.
 
     Args:
         request: FastAPI request object
@@ -19,14 +46,14 @@ def validate_local_api_key(request: Request, expected_key: SecretStr) -> bool:
     Raises:
         HTTPException: 401 if key is missing or invalid
     """
-    api_key = request.headers.get("api-key")
+    api_key = extract_api_key(request)
 
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
                 "error": "missing_api_key",
-                "message": "API key is required. Include 'api-key' header in your request.",
+                "message": "API key is required. Include 'api-key' or 'Authorization: Bearer' header.",
             },
         )
 
@@ -35,7 +62,7 @@ def validate_local_api_key(request: Request, expected_key: SecretStr) -> bool:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
                 "error": "invalid_api_key",
-                "message": "Invalid API key. Check your 'api-key' header value.",
+                "message": "Invalid API key.",
             },
         )
 
