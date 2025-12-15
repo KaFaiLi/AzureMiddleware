@@ -48,7 +48,12 @@ class AppState:
 
         # Initialize auth provider based on mode
         if config.azure.auth_mode == AuthMode.AAD:
-            self.auth_provider = AADTokenProvider()
+            # Pass AAD credentials if provided in config
+            self.auth_provider = AADTokenProvider(
+                tenant_id=config.azure.tenant_id,
+                client_id=config.azure.client_id,
+                client_secret=config.azure.client_secret.get_secret_value() if config.azure.client_secret else None,
+            )
         else:
             self.auth_provider = APIKeyProvider(config.azure.api_key)
 

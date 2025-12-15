@@ -32,6 +32,16 @@ class AzureConfig(BaseModel):
     api_key: SecretStr | None = Field(
         default=None, description="API key (if auth_mode=api_key)"
     )
+    # AAD (Azure Active Directory) credentials
+    tenant_id: str | None = Field(
+        default=None, description="Azure AD tenant ID (optional, for service principal auth)"
+    )
+    client_id: str | None = Field(
+        default=None, description="Azure AD client (application) ID (optional, for service principal auth)"
+    )
+    client_secret: SecretStr | None = Field(
+        default=None, description="Azure AD client secret (optional, for service principal auth)"
+    )
 
     @field_validator("endpoint")
     @classmethod
@@ -48,6 +58,19 @@ class AzureConfig(BaseModel):
         """Validate that API key is provided when auth_mode is api_key."""
         if self.auth_mode == AuthMode.API_KEY and not self.api_key:
             raise ValueError("api_key is required when auth_mode is 'api_key'")
+        return self
+
+    @model_validator(mode="after")
+    def validate_aad_credentials(self) -> "AzureConfig":
+        """Validate that AAD credentials are complete if any are provided."""
+        aad_fields = [self.tenant_id, self.client_id, self.client_secret]
+        provided_count = sum(1 for field in aad_fields if field is not None)
+        
+        if provided_count > 0 and provided_count < 3:
+            raise ValueError(
+                "If providing AAD credentials, all three fields must be set: "
+                "tenant_id, client_id, and client_secret"
+            )
         return self
 
 

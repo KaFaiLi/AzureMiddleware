@@ -21,6 +21,18 @@ azure:
   
   # API key (only used if auth_mode is "api_key")
   api_key: ""
+  
+  # Azure AD (AAD) Service Principal credentials (optional)
+  # If provided, all three fields must be set
+  # If not provided, falls back to DefaultAzureCredential chain:
+  #   1. Environment variables (AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET)
+  #   2. Managed Identity
+  #   3. Azure CLI
+  #   4. Azure PowerShell
+  #   5. Interactive browser (if available)
+  tenant_id: ""
+  client_id: ""
+  client_secret: ""
 
 # Pricing in EUR per 1000 tokens
 # Add entries for each deployment you use
