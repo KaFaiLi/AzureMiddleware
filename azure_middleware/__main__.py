@@ -17,7 +17,19 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         prog="azure-middleware",
-        description="Local FastAPI proxy for Azure OpenAI with authentication, logging, and cost tracking",
+        description="Local FastAPI proxy for Azure OpenAI with authentication, logging, and cost tracking.\n\n"
+                    "USAGE EXAMPLES:\n"
+                    "  python -m azure_middleware --config config.yaml --local local.yaml\n"
+                    "  python -m azure_middleware --host 127.0.0.1 --port 8000\n\n"
+                    "Config files:\n"
+                    "  config.yaml: Server settings (Azure, logging, pricing, limits)\n"
+                    "  local.yaml: Local settings (host, port, api_key)",
+        epilog="For more information, see the documentation or use --help for all options."
+    )
+    parser.add_argument(
+        "--example",
+        action="store_true",
+        help="Show example usage and exit."
     )
     parser.add_argument(
         "--config",
@@ -59,6 +71,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """Main entry point."""
     args = parse_args()
+
+    if getattr(args, "example", False):
+        print("\nExample usage:\n  python -m azure_middleware --config config.yaml --local local.yaml\n  python -m azure_middleware --host 127.0.0.1 --port 8000\n")
+        return 0
 
     # Import here to avoid circular imports and speed up --help
     from azure_middleware.config import load_config, load_config_single_file, ConfigError
