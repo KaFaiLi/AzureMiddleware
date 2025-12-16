@@ -2,95 +2,60 @@
 
 Local FastAPI proxy for Azure OpenAI with authentication, encrypted logging, and cost tracking.
 
-## Architecture Overview
+## Architecture & Patterns
 
-```
-azure_middleware/
-├── server.py          # FastAPI app factory, AppState container
-├── config.py          # Pydantic config models, validation
-├── dependencies.py    # FastAPI dependency injection
-├── auth/              # AAD (azure-identity) or API key auth providers
-├── cost/              # CostTracker (async-safe), calculator (EUR/1000 tokens)
-├── logging/           # AES-256-GCM encryption, JSONL writer
-├── routes/            # chat.py, embeddings.py, responses.py, health.py
-└── streaming/         # SSE StreamBuffer for chunked responses
-```
+### Core Components
+- **State Management**: `AppState` in `server.py` holds singletons (`config`, `cost_tracker`, `log_writer`, `auth_provider`). Access via `request.app.state.app_state`.
+- **Configuration**: Pydantic models in `config.py`. `SecretStr` for keys. Custom validators for Azure endpoints and key lengths.
+- **Authentication**: 
+  - **Incoming**: `LocalAPIKeyMiddleware` protects this proxy.
+  - **Outgoing**: `AADTokenProvider` (Azure Identity) or `APIKeyProvider` for Azure OpenAI.
+- **Cost Tracking**: `CostTracker` (`cost/tracker.py`) uses `asyncio.Lock` for thread-safe updates. Persists state by re-reading logs on startup.
 
-**Data Flow**: Client → LocalAPIKeyMiddleware → Route → Azure proxy → CostTracker → LogWriter → JSONL
+### Logging & Encryption
+- **Format**: JSONL files in `logs/YYYYMMDD/{username}_YYYYMMDD.jsonl`.
+- **Encryption**: AES-256-GCM (`logging/encryption.py`).
+  - Fields `request` and `response` are encrypted individually.
+  - **Format**: `$enc:BASE64([flags:1][nonce:12][ciphertext:N][tag:16])`.
+  - **Compression**: Data >= 100 bytes is automatically GZIP compressed before encryption (Flag bit 0 set). *Note: The `compression` config setting is currently not enforced; behavior is hardcoded.*
+- **Privacy**: Embedding vectors are explicitly excluded from logs.
 
-## Key Patterns
+## Development Workflow
 
-### AppState Pattern
-All shared state lives in `AppState` ([server.py](azure_middleware/server.py#L27)):
-```python
-state = request.app.state.app_state  # Access via get_app_state()
-state.config, state.cost_tracker, state.log_writer, state.auth_provider
-```
-
-### Config Validation
-Pydantic models in [config.py](azure_middleware/config.py) with custom validators:
-- `AzureConfig.validate_endpoint()` - must be `https://*.openai.azure.com`
-- `LoggingConfig.validate_encryption_key()` - must decode to exactly 32 bytes
-- Use `SecretStr` for sensitive fields (api keys, encryption key)
-
-### Cost Tracking
-- `CostTracker` uses `asyncio.Lock` for thread-safe updates
-- Pricing in `config.yaml` as EUR per 1000 tokens
-- Pre-request cap check via `await cost_tracker.check_cap()`
-- Persisted via JSONL logs, recovered on startup
-
-### Logging
-- Path pattern: `logs/YYYYMMDD/{username}_YYYYMMDD.jsonl`
-- Request/response encrypted with AES-256-GCM, metadata plaintext
-- Embedding vectors NOT logged (space savings per spec)
-
-## Commands
-
+### Setup & Run
 ```bash
-# Install (dev mode)
+# Install dev dependencies
 pip install -e ".[dev]"
 
+# Generate encryption key (32 bytes base64)
+python -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+
 # Run server
-python -m azure_middleware              # or: azure-middleware
-azure-middleware --config /path/to/config.yaml
-
-# Tests
-pytest                                  # Unit tests
-pytest -m integration                   # Requires running server
-pytest -m thinking                      # Thinking model tests
-pytest -m embedding                     # Embedding model tests
-
-# Code quality
-ruff check .
-mypy azure_middleware
+python -m azure_middleware --config config.yaml
 ```
 
-## Testing
+### Testing Strategy
+- **Unit Tests**: `pytest` (fast, mocks external calls).
+- **Integration Tests**: `pytest -m integration`.
+  - **Requirement**: Requires a running server instance.
+  - **Setup**:
+    1. Start server: `python -m azure_middleware`
+    2. Run tests: `MIDDLEWARE_URL=http://localhost:8000 MIDDLEWARE_API_KEY=... pytest -m integration`
+- **Fixtures**: 
+  - `tests/conftest.py`: Mocked configs and unit test fixtures.
+  - `tests/integration/conftest.py`: Real HTTP clients for integration.
 
-Integration tests use real Azure endpoints via running middleware:
-```bash
-# Terminal 1: Start server
-python -m azure_middleware
+## Key Files
+- `azure_middleware/server.py`: App factory and dependency wiring.
+- `azure_middleware/config.py`: Configuration schema and validation logic.
+- `azure_middleware/logging/encryption.py`: Custom encryption/compression logic.
+- `azure_middleware/routes/chat.py`: Example route implementation (streaming, cost tracking, logging).
 
-# Terminal 2: Run integration tests
-MIDDLEWARE_URL=http://localhost:8000 MIDDLEWARE_API_KEY=your-key pytest -m integration
-```
-
-Test fixtures in [tests/conftest.py](tests/conftest.py) provide mocked configs. Integration fixtures in [tests/integration/conftest.py](tests/integration/conftest.py) use env vars.
-
-## Adding New Routes
-
-1. Create router in `azure_middleware/routes/`
-2. Use `get_app_state(request)` for state access
-3. Check cost cap before Azure call: `await cost_tracker.check_cap()`
-4. Use `build_azure_url()` and `filter_request_headers()` from [chat.py](azure_middleware/routes/chat.py)
-5. Log via `log_writer.write()` with `LogEntry`
-6. Register router in [server.py](azure_middleware/server.py)
-
-## Configuration
-
-See [config.example.yaml](config.example.yaml) for full schema. Key sections:
-- `azure`: endpoint, deployment, auth_mode (aad|api_key)
-- `local`: host, port, api_key (protects middleware)
-- `pricing`: per-model EUR/1000 tokens
-- `logging`: encryption_key (base64 32-byte), compression
+## Common Tasks
+- **Adding Routes**: 
+  1. Create router in `routes/`.
+  2. Inject `AppState`.
+  3. Check `await state.cost_tracker.check_cap()`.
+  4. Log via `state.log_writer.write()`.
+  5. Register in `server.py`.
+- **Debugging**: Logs are encrypted. Use a decryption script (like `decrypt_logs.py`) to inspect `request_body`/`response_body`.
