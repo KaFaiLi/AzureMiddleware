@@ -212,6 +212,15 @@ async def chat_completions(
     # Check if streaming
     is_streaming = request_data.get("stream", False) is True
 
+    # For streaming requests, ensure we get usage stats in the final chunk
+    # Azure OpenAI requires stream_options.include_usage = true to get token counts
+    if is_streaming:
+        if "stream_options" not in request_data:
+            request_data["stream_options"] = {}
+        request_data["stream_options"]["include_usage"] = True
+        # Re-encode the modified request
+        raw_body = json.dumps(request_data).encode("utf-8")
+
     # Build Azure URL
     query_params = dict(request.query_params)
     azure_url = build_azure_url(config, deployment, "chat/completions", query_params)
