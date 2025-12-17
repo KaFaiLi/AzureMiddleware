@@ -10,6 +10,7 @@ A local FastAPI proxy for Azure OpenAI with authentication, encrypted logging, c
 - **Local API Key**: Protect your middleware with a local API key
 - **Cost Tracking**: Real-time daily cost tracking with configurable EUR cap
 - **Encrypted Logging**: All requests/responses logged in JSONL with AES-256-GCM encryption
+- **High-Performance Batch Logging**: Async queue-based batch writes optimized for high-latency storage
 - **Streaming Support**: Full SSE streaming with proper cost calculation and logging
 - **Swagger UI**: Interactive API documentation at `/docs`
 
@@ -338,17 +339,27 @@ pricing:
 | `encryption_key` | string | Yes | Base64-encoded 32-byte AES key |
 | `compression` | string | No | `gzip` or `none` (default: `gzip`) |
 | `directory` | string | No | Log directory path (default: `logs`) |
+| `batch_size` | int | No | Max log entries per batch write (1-1000, default: 10) |
+| `batch_timeout` | float | No | Max seconds before flushing partial batch (0.1-60.0, default: 1.0) |
+
+**High-Latency Storage Optimization**: For network drives or cloud storage, increase `batch_size` (20-50) and `batch_timeout` (1.0-2.0) to improve throughput. See [specs/master/batch-logging.md](specs/master/batch-logging.md) for details.
 
 ## Development
 
 ### Running Tests
 
 ```bash
-# Unit tests
-python -m pytest tests/ -v
+# Unit tests (no server required)
+python -m pytest tests/ --ignore=tests/integration/ -v
 
 # Integration tests (requires running server)
-python -m pytest tests/integration/ -v
+# Start server first: python -m azure_middleware
+MIDDLEWARE_URL=http://localhost:8000 \
+MIDDLEWARE_API_KEY=your-local-key \
+python -m pytest tests/integration/ -v -m integration
+
+# Test with AAD authentication (configure server with auth_mode: aad)
+MIDDLEWARE_AUTH_MODE=aad python -m pytest tests/integration/ -v
 
 # Skip specific test types
 python -m pytest tests/integration/ -v -m "not thinking"

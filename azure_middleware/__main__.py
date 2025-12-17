@@ -98,6 +98,8 @@ def main() -> int:
 
     # Run server
     import uvicorn
+    import signal
+    import threading
 
     print(f"Starting Azure OpenAI Middleware on http://{host}:{port}")
     print(f"  Azure endpoint: {config.azure.endpoint}")
@@ -105,13 +107,25 @@ def main() -> int:
     print(f"  Daily cost cap: €{config.limits.daily_cost_cap_eur:.2f}")
     print()
 
-    uvicorn.run(
+    # Use uvicorn Server API for signal-based graceful shutdown
+    config_uvicorn = uvicorn.Config(
         app,
         host=host,
         port=port,
         reload=args.reload,
         log_level="info",
     )
+    server = uvicorn.Server(config_uvicorn)
+
+    def handle_signal(signum, frame):
+        print(f"\nReceived signal {signum}, initiating graceful shutdown...")
+        server.should_exit = True
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    # Run server (blocking)
+    server.run()
     return 0
 
 

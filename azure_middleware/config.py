@@ -113,6 +113,12 @@ class LoggingConfig(BaseModel):
         default="gzip", description="Compression algorithm"
     )
     directory: str = Field(default="logs", description="Log directory path")
+    batch_size: int = Field(
+        default=10, ge=1, le=1000, description="Maximum log entries per batch write"
+    )
+    batch_timeout: float = Field(
+        default=1.0, ge=0.1, le=60.0, description="Maximum seconds to wait before flushing partial batch"
+    )
 
     @field_validator("encryption_key")
     @classmethod

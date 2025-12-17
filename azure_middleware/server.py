@@ -38,6 +38,8 @@ class AppState:
             directory=config.logging.directory,
             encryptor=self.encryptor,
             compression=config.logging.compression,
+            batch_size=config.logging.batch_size,
+            batch_timeout=config.logging.batch_timeout,
         )
 
         # Initialize cost tracker
@@ -75,6 +77,10 @@ def create_app(config: AppConfig) -> FastAPI:
         """Application lifespan handler."""
         # Startup
         logger.info("Starting Azure OpenAI Middleware...")
+        
+        # Start background log writer
+        await state.log_writer.start()
+        
         await state.cost_tracker.initialize()
         logger.info(
             f"Cost tracker initialized: €{await state.cost_tracker.get_current_cost():.4f} / €{state.cost_tracker.daily_cap:.2f}"
@@ -84,6 +90,9 @@ def create_app(config: AppConfig) -> FastAPI:
 
         # Shutdown
         logger.info("Shutting down Azure OpenAI Middleware...")
+        
+        # Stop background log writer and flush pending entries
+        await state.log_writer.stop()
 
     # Create FastAPI app
     app = FastAPI(

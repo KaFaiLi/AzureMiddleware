@@ -6,6 +6,23 @@ testing the middleware with real Azure OpenAI endpoints.
 Note: Integration tests require:
 1. A running middleware server (python -m azure_middleware)
 2. Valid Azure OpenAI credentials in config.yaml
+3. Authentication can be API key or AAD (set via MIDDLEWARE_AUTH_MODE)
+
+Environment Variables:
+- MIDDLEWARE_URL: Middleware endpoint (default: http://localhost:8000)
+- MIDDLEWARE_API_KEY: Local API key for middleware (required for both auth modes)
+- MIDDLEWARE_AUTH_MODE: "api_key" or "aad" (default: api_key)
+- AZURE_API_VERSION: API version (default: 2024-02-01)
+- CHAT_MODEL: Chat model deployment name
+- THINKING_MODEL: Thinking model deployment name
+- EMBEDDING_MODEL: Embedding model deployment name
+
+For AAD testing, ensure your middleware config.yaml has:
+  azure:
+    auth_mode: aad
+    tenant_id: "..."  # Optional, or use DefaultAzureCredential
+    client_id: "..."
+    client_secret: "..."
 """
 
 import os
@@ -19,6 +36,7 @@ import httpx
 # Configuration from environment or defaults
 MIDDLEWARE_URL = os.getenv("MIDDLEWARE_URL", "http://localhost:8000")
 MIDDLEWARE_API_KEY = os.getenv("MIDDLEWARE_API_KEY", "test-local-key-12345")
+MIDDLEWARE_AUTH_MODE = os.getenv("MIDDLEWARE_AUTH_MODE", "api_key")  # "api_key" or "aad"
 API_VERSION = os.getenv("AZURE_API_VERSION", "2024-02-01")
 
 # Model deployments
@@ -34,8 +52,14 @@ def middleware_url() -> str:
 
 
 @pytest.fixture(scope="session")
+def auth_mode() -> str:
+    """Get the middleware authentication mode (api_key or aad)."""
+    return MIDDLEWARE_AUTH_MODE
+
+
+@pytest.fixture(scope="session")
 def api_key() -> str:
-    """Get the middleware API key."""
+    """Get the middleware API key (for local middleware authentication)."""
     return MIDDLEWARE_API_KEY
 
 
@@ -102,12 +126,19 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
-def check_server_running(middleware_url: str) -> None:
-    """Verify the middleware server is running before each test."""
+def check_server_running(middleware_url: str, auth_mode: str) -> None:
+    """Verify the middleware server is running before each test.
+    
+    Also logs the authentication mode being tested.
+    """
     try:
         response = httpx.get(f"{middleware_url}/health", timeout=5.0)
         if response.status_code != 200:
             pytest.skip(f"Middleware server not healthy: {response.status_code}")
+        
+        # Log auth mode for debugging
+        print(f"\nTesting with auth mode: {auth_mode}")
+        
     except httpx.ConnectError:
         pytest.skip(f"Middleware server not running at {middleware_url}")
     except Exception as e:

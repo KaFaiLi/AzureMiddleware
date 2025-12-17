@@ -84,6 +84,8 @@ class LogWriter:
         directory: str | Path,
         encryptor: FieldEncryptor,
         compression: str = "gzip",
+        batch_size: int = 10,
+        batch_timeout: float = 1.0,
     ) -> None:
         """Initialize the log writer.
 
@@ -91,12 +93,21 @@ class LogWriter:
             directory: Base directory for log files
             encryptor: FieldEncryptor instance for request/response encryption
             compression: Compression mode ("gzip" or "none") - applied by encryptor
+            batch_size: Maximum number of log entries per batch write
+            batch_timeout: Maximum time (seconds) to wait before flushing partial batch
         """
         self._directory = Path(directory)
         self._encryptor = encryptor
         self._compression = compression
         self._write_lock = asyncio.Lock()
         self._username = get_windows_username()
+        
+        # Async queue and batch configuration
+        self._queue: asyncio.Queue[LogEntry | None] = asyncio.Queue()
+        self._batch_size = batch_size
+        self._batch_timeout = batch_timeout
+        self._background_task: asyncio.Task | None = None
+        self._shutdown = False
 
     def _get_log_path(self, dt: datetime) -> Path:
         """Get the log file path for a given datetime.
@@ -157,36 +168,23 @@ class LogWriter:
         return json.dumps(data, separators=(",", ":"))
 
     async def write(self, entry: LogEntry) -> bool:
-        """Write a log entry asynchronously (best-effort).
+        """Write a log entry asynchronously via queue (best-effort).
 
-        This method will not raise exceptions - logging failures are
-        logged to the standard logger but do not block request processing.
+        This method enqueues the entry and returns immediately,
+        decoupling request latency from disk I/O.
 
         Args:
             entry: LogEntry to write
 
         Returns:
-            True if write succeeded, False otherwise
+            True (always succeeds unless queue is full)
         """
         try:
-            log_path = self._get_log_path(entry.timestamp)
-
-            # Ensure directory exists
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Serialize entry
-            line = self._serialize_entry(entry) + "\n"
-
-            # Write with lock to prevent interleaved writes
-            async with self._write_lock:
-                # Use asyncio to run blocking I/O in thread pool
-                await asyncio.to_thread(self._write_line, log_path, line)
-
+            # Non-blocking enqueue (returns immediately)
+            await self._queue.put(entry)
             return True
-
         except Exception as e:
-            # Best-effort: log error but don't raise
-            logger.warning(f"Failed to write log entry: {e}")
+            logger.warning(f"Failed to enqueue log entry: {e}")
             return False
 
     def _write_line(self, path: Path, line: str) -> None:
@@ -198,6 +196,146 @@ class LogWriter:
         """
         with open(path, "a", encoding="utf-8") as f:
             f.write(line)
+
+    async def start(self) -> None:
+        """Start the background log writer task.
+        
+        Should be called during application startup.
+        """
+        if self._background_task is None:
+            self._shutdown = False
+            self._background_task = asyncio.create_task(self._background_writer())
+            logger.info(f"Log writer started (batch_size={self._batch_size}, timeout={self._batch_timeout}s)")
+
+    async def stop(self) -> None:
+        """Stop the background log writer task and flush pending entries.
+        
+        Should be called during application shutdown.
+        """
+        if self._background_task:
+            self._shutdown = True
+            # Send sentinel to wake up the worker
+            await self._queue.put(None)
+            # Wait for worker to finish
+            await self._background_task
+            self._background_task = None
+            logger.info("Log writer stopped")
+
+    async def _background_writer(self) -> None:
+        """Background task that consumes queue and writes in batches."""
+        logger.info("Background log writer task started")
+        
+        while not self._shutdown:
+            try:
+                batch = await self._collect_batch()
+                if batch:
+                    await self._write_batch(batch)
+            except Exception as e:
+                logger.error(f"Error in background writer: {e}", exc_info=True)
+        
+        # Final flush on shutdown
+        await self._flush_remaining()
+        logger.info("Background log writer task stopped")
+
+    async def _collect_batch(self) -> list[LogEntry]:
+        """Collect a batch of log entries from the queue.
+        
+        Returns:
+            List of log entries (up to batch_size)
+        """
+        batch: list[LogEntry] = []
+        
+        try:
+            # Wait for first entry (with timeout)
+            entry = await asyncio.wait_for(
+                self._queue.get(),
+                timeout=self._batch_timeout
+            )
+            
+            # Sentinel value for shutdown
+            if entry is None:
+                return batch
+            
+            batch.append(entry)
+            
+            # Collect additional entries up to batch_size (non-blocking)
+            while len(batch) < self._batch_size:
+                try:
+                    entry = self._queue.get_nowait()
+                    if entry is None:  # Sentinel
+                        return batch
+                    batch.append(entry)
+                except asyncio.QueueEmpty:
+                    break
+        
+        except asyncio.TimeoutError:
+            # Timeout waiting for first entry, return empty batch
+            pass
+        
+        return batch
+
+    async def _write_batch(self, batch: list[LogEntry]) -> None:
+        """Write a batch of log entries to disk.
+        
+        Groups entries by date and writes to appropriate files.
+        
+        Args:
+            batch: List of log entries to write
+        """
+        if not batch:
+            return
+        
+        # Group entries by date
+        entries_by_date: dict[Path, list[str]] = {}
+        
+        for entry in batch:
+            log_path = self._get_log_path(entry.timestamp)
+            line = self._serialize_entry(entry) + "\n"
+            
+            if log_path not in entries_by_date:
+                entries_by_date[log_path] = []
+            entries_by_date[log_path].append(line)
+        
+        # Write batches to each file
+        for log_path, lines in entries_by_date.items():
+            try:
+                # Ensure directory exists
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Batch write with lock
+                async with self._write_lock:
+                    await asyncio.to_thread(self._write_lines, log_path, lines)
+                
+                logger.debug(f"Wrote {len(lines)} log entries to {log_path}")
+            
+            except Exception as e:
+                logger.warning(f"Failed to write batch to {log_path}: {e}")
+
+    def _write_lines(self, path: Path, lines: list[str]) -> None:
+        """Write multiple lines to a file (blocking, run in thread pool).
+        
+        Args:
+            path: File path to write to
+            lines: Lines to write
+        """
+        with open(path, "a", encoding="utf-8") as f:
+            f.writelines(lines)
+
+    async def _flush_remaining(self) -> None:
+        """Flush any remaining entries in the queue during shutdown."""
+        remaining: list[LogEntry] = []
+        
+        while not self._queue.empty():
+            try:
+                entry = self._queue.get_nowait()
+                if entry is not None:  # Skip sentinels
+                    remaining.append(entry)
+            except asyncio.QueueEmpty:
+                break
+        
+        if remaining:
+            logger.info(f"Flushing {len(remaining)} remaining log entries")
+            await self._write_batch(remaining)
 
     def get_last_entry_for_date(self, target_date: date) -> LogEntry | None:
         """Read the last log entry for a specific date.

@@ -38,13 +38,18 @@ def encryptor():
 
 
 @pytest.fixture
-def log_writer(temp_log_dir, encryptor):
+async def log_writer(temp_log_dir, encryptor):
     """Create a LogWriter instance for testing."""
-    return LogWriter(
+    writer = LogWriter(
         directory=temp_log_dir,
         encryptor=encryptor,
         compression="gzip",
+        batch_size=10,
+        batch_timeout=0.5,
     )
+    await writer.start()
+    yield writer
+    await writer.stop()
 
 
 def create_test_entry(index: int, user: str = "testuser") -> LogEntry:
@@ -77,6 +82,9 @@ class TestLogWriterConcurrency:
         
         assert result is True
         
+        # Wait for batch to be written
+        await asyncio.sleep(1.0)
+        
         # Verify file was created
         log_files = list(temp_log_dir.rglob("*.jsonl"))
         assert len(log_files) == 1
@@ -104,6 +112,9 @@ class TestLogWriterConcurrency:
         
         # All writes should succeed
         assert all(results), "Some writes failed"
+        
+        # Wait for batch writes to complete
+        await asyncio.sleep(1.5)
         
         # Verify file content
         log_files = list(temp_log_dir.rglob("*.jsonl"))
@@ -142,21 +153,32 @@ class TestLogWriterConcurrency:
                 directory=temp_log_dir,
                 encryptor=encryptor,
                 compression="gzip",
+                batch_size=10,
+                batch_timeout=0.5,
             )
             writer._username = user  # Override username for testing
+            await writer.start()
             writers[user] = writer
         
-        # Create entries for each user
-        all_tasks = []
-        for user in users:
-            for i in range(writes_per_user):
-                entry = create_test_entry(i, user=user)
-                entry.user = user
-                all_tasks.append(writers[user].write(entry))
-        
-        # Run all writes concurrently
-        results = await asyncio.gather(*all_tasks)
-        assert all(results), "Some writes failed"
+        try:
+            # Create entries for each user
+            all_tasks = []
+            for user in users:
+                for i in range(writes_per_user):
+                    entry = create_test_entry(i, user=user)
+                    entry.user = user
+                    all_tasks.append(writers[user].write(entry))
+            
+            # Run all writes concurrently
+            results = await asyncio.gather(*all_tasks)
+            assert all(results), "Some writes failed"
+            
+            # Wait for batch writes to complete
+            await asyncio.sleep(1.5)
+        finally:
+            # Stop all writers
+            for writer in writers.values():
+                await writer.stop()
         
         # Verify each user has their own file with correct count
         log_files = list(temp_log_dir.rglob("*.jsonl"))
@@ -190,6 +212,9 @@ class TestLogWriterConcurrency:
         success_count = sum(results)
         assert success_count == num_writes, f"Expected {num_writes} successes, got {success_count}"
         
+        # Wait for batch writes to complete
+        await asyncio.sleep(2.0)
+        
         # Verify integrity
         log_files = list(temp_log_dir.rglob("*.jsonl"))
         with open(log_files[0], "r") as f:
@@ -222,6 +247,9 @@ class TestLogWriterConcurrency:
         
         assert all(results)
         
+        # Wait for batch writes to complete
+        await asyncio.sleep(1.5)
+        
         # Verify all lines are complete
         log_files = list(temp_log_dir.rglob("*.jsonl"))
         with open(log_files[0], "r") as f:
@@ -238,7 +266,10 @@ class TestLogWriterConcurrency:
             directory=temp_log_dir,
             encryptor=encryptor,
             compression="gzip",
+            batch_size=10,
+            batch_timeout=0.5,
         )
+        await writer.start()
         
         # Create entries with large payloads to increase chance of interleaving without lock
         large_entries = []
@@ -262,6 +293,10 @@ class TestLogWriterConcurrency:
         results = await asyncio.gather(*tasks)
         
         assert all(results)
+        
+        # Wait for batch writes and stop writer
+        await asyncio.sleep(1.5)
+        await writer.stop()
         
         # Verify no corruption
         log_files = list(temp_log_dir.rglob("*.jsonl"))
@@ -332,18 +367,22 @@ class TestAsyncLockBehavior:
             directory=temp_log_dir,
             encryptor=encryptor,
             compression="gzip",
+            batch_size=5,
+            batch_timeout=0.5,
         )
+        await writer.start()
         
         write_order = []
-        original_write_line = writer._write_line
+        original_write_lines = writer._write_lines
         
-        def tracking_write_line(path, line):
+        def tracking_write_lines(path, lines):
             """Track write order."""
-            data = json.loads(line)
-            write_order.append(data["duration_ms"])
-            return original_write_line(path, line)
+            for line in lines:
+                data = json.loads(line)
+                write_order.append(data["duration_ms"])
+            return original_write_lines(path, lines)
         
-        writer._write_line = tracking_write_line
+        writer._write_lines = tracking_write_lines
         
         # Create entries with sequential durations
         entries = [create_test_entry(i) for i in range(10)]
@@ -351,6 +390,10 @@ class TestAsyncLockBehavior:
         # Write concurrently
         tasks = [writer.write(entry) for entry in entries]
         await asyncio.gather(*tasks)
+        
+        # Wait for batch writes and stop
+        await asyncio.sleep(1.5)
+        await writer.stop()
         
         # All writes should have completed
         assert len(write_order) == 10
@@ -372,24 +415,42 @@ class TestAsyncLockBehavior:
         """
         # This simulates multiple request handlers writing logs for same user
         writers = [
-            LogWriter(directory=temp_log_dir, encryptor=encryptor, compression="gzip")
+            LogWriter(
+                directory=temp_log_dir, 
+                encryptor=encryptor, 
+                compression="gzip",
+                batch_size=10,
+                batch_timeout=0.5,
+            )
             for _ in range(5)
         ]
+        
+        # Start all writers
+        for w in writers:
+            await w.start()
         
         # All writers use same username
         for w in writers:
             w._username = "shared_user"
         
-        # Each writer writes multiple entries
-        all_tasks = []
-        for w_idx, writer in enumerate(writers):
-            for e_idx in range(10):
-                entry = create_test_entry(w_idx * 100 + e_idx, user="shared_user")
-                all_tasks.append(writer.write(entry))
-        
-        results = await asyncio.gather(*all_tasks)
-        # Note: Some writes may report success but race on file I/O
-        assert sum(results) > 0  # At least some writes succeed
+        try:
+            # Each writer writes multiple entries
+            all_tasks = []
+            for w_idx, writer in enumerate(writers):
+                for e_idx in range(10):
+                    entry = create_test_entry(w_idx * 100 + e_idx, user="shared_user")
+                    all_tasks.append(writer.write(entry))
+            
+            results = await asyncio.gather(*all_tasks)
+            # Note: Some writes may report success but race on file I/O
+            assert sum(results) > 0  # At least some writes succeed
+            
+            # Wait for batch writes
+            await asyncio.sleep(1.5)
+        finally:
+            # Stop all writers
+            for w in writers:
+                await w.stop()
         
         # Verify single file exists
         log_files = list(temp_log_dir.rglob("*.jsonl"))

@@ -79,3 +79,10 @@ logging:
   
   # Log directory (relative to working directory or absolute)
   directory: "logs"
+  
+  # Batch write configuration for high-latency storage (e.g., network drives)
+  # Maximum number of log entries to batch per write (1-1000)
+  batch_size: 10
+  
+  # Maximum time in seconds to wait before flushing a partial batch (0.1-60.0)
+  batch_timeout: 1.0
